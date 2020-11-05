@@ -51,40 +51,40 @@ import com.zaxxer.hikari.HikariDataSource;
  * @author Nacos
  */
 public class ExternalDataSourceServiceImpl implements DataSourceService {
-    
+
     private static final Logger LOGGER = LoggerFactory.getLogger(ExternalDataSourceServiceImpl.class);
-    
+
     private static final String JDBC_DRIVER_NAME = "com.mysql.cj.jdbc.Driver";
-    
+
     /**
      * JDBC execute timeout value, unit:second.
      */
     private int queryTimeout = 3;
-    
+
     private static final int TRANSACTION_QUERY_TIMEOUT = 5;
-    
+
     private static final String DB_LOAD_ERROR_MSG = "[db-load-error]load jdbc.properties error";
-    
+
     private List<HikariDataSource> dataSourceList = new ArrayList<>();
-    
+
     private JdbcTemplate jt;
-    
+
     private DataSourceTransactionManager tm;
-    
+
     private TransactionTemplate tjt;
-    
+
     private JdbcTemplate testMasterJT;
-    
+
     private JdbcTemplate testMasterWritableJT;
-    
+
     private volatile List<JdbcTemplate> testJtList;
-    
+
     private volatile List<Boolean> isHealthList;
-    
+
     private volatile int masterIndex;
-    
+
     private static Pattern ipPattern = Pattern.compile("\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}");
-    
+
     @Override
     public void init() {
         queryTimeout = ConvertUtils.toInt(System.getProperty("QUERYTIMEOUT"), 3);
@@ -92,22 +92,22 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
         // Set the maximum number of records to prevent memory expansion
         jt.setMaxRows(50000);
         jt.setQueryTimeout(queryTimeout);
-        
+
         testMasterJT = new JdbcTemplate();
         testMasterJT.setQueryTimeout(queryTimeout);
-        
+
         testMasterWritableJT = new JdbcTemplate();
         // Prevent the login interface from being too long because the main library is not available
         testMasterWritableJT.setQueryTimeout(1);
-        
+
         //  Database health check
-        
+
         testJtList = new ArrayList<JdbcTemplate>();
         isHealthList = new ArrayList<Boolean>();
-        
+
         tm = new DataSourceTransactionManager();
         tjt = new TransactionTemplate(tm);
-        
+
         // Transaction timeout needs to be distinguished from ordinary operations.
         tjt.setTimeout(TRANSACTION_QUERY_TIMEOUT);
         if (PropertyUtil.isUseExternalDB()) {
@@ -117,12 +117,12 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
                 e.printStackTrace();
                 throw new RuntimeException(DB_LOAD_ERROR_MSG);
             }
-            
+
             ConfigExecutor.scheduleConfigTask(new SelectMasterTask(), 10, 10, TimeUnit.SECONDS);
             ConfigExecutor.scheduleConfigTask(new CheckDbHealthTask(), 10, 10, TimeUnit.SECONDS);
         }
     }
-    
+
     @Override
     public synchronized void reload() throws IOException {
         try {
@@ -141,15 +141,15 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
             throw new IOException(e);
         }
     }
-    
+
     @Override
     public boolean checkMasterWritable() {
-        
+
         testMasterWritableJT.setDataSource(jt.getDataSource());
         // Prevent the login interface from being too long because the main library is not available
         testMasterWritableJT.setQueryTimeout(1);
-        String sql = " SELECT @@read_only ";
-        
+        String sql = PropertyUtil.getDbCheckReadonlySql();
+
         try {
             Integer result = testMasterWritableJT.queryForObject(sql, Integer.class);
             if (result == null) {
@@ -161,19 +161,19 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
             FATAL_LOG.error("[db-error] " + e.toString(), e);
             return false;
         }
-        
+
     }
-    
+
     @Override
     public JdbcTemplate getJdbcTemplate() {
         return this.jt;
     }
-    
+
     @Override
     public TransactionTemplate getTransactionTemplate() {
         return this.tjt;
     }
-    
+
     @Override
     public String getCurrentDbUrl() {
         DataSource ds = this.jt.getDataSource();
@@ -183,7 +183,7 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
         HikariDataSource bds = (HikariDataSource) ds;
         return bds.getJdbcUrl();
     }
-    
+
     @Override
     public String getHealth() {
         for (int i = 0; i < isHealthList.size(); i++) {
@@ -197,33 +197,33 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
                 }
             }
         }
-        
+
         return "UP";
     }
-    
+
     private String getIpFromUrl(String url) {
-        
+
         Matcher m = ipPattern.matcher(url);
         if (m.find()) {
             return m.group();
         }
-        
+
         return "";
     }
-    
+
     static String defaultIfNull(String value, String defaultValue) {
         return null == value ? defaultValue : value;
     }
-    
+
     class SelectMasterTask implements Runnable {
-        
+
         @Override
         public void run() {
             if (DEFAULT_LOG.isDebugEnabled()) {
                 DEFAULT_LOG.debug("check master db.");
             }
             boolean isFound = false;
-            
+
             int index = -1;
             for (HikariDataSource ds : dataSourceList) {
                 index++;
@@ -243,24 +243,24 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
                     e.printStackTrace(); // TODO remove
                 }
             }
-            
+
             if (!isFound) {
                 FATAL_LOG.error("[master-db] master db not found.");
                 MetricsMonitor.getDbException().increment();
             }
         }
     }
-    
+
     @SuppressWarnings("PMD.ClassNamingShouldBeCamelRule")
     class CheckDbHealthTask implements Runnable {
-        
+
         @Override
         public void run() {
             if (DEFAULT_LOG.isDebugEnabled()) {
                 DEFAULT_LOG.debug("check db health.");
             }
             String sql = "SELECT * FROM config_info_beta WHERE id = 1";
-            
+
             for (int i = 0; i < testJtList.size(); i++) {
                 JdbcTemplate jdbcTemplate = testJtList.get(i);
                 try {
@@ -275,7 +275,7 @@ public class ExternalDataSourceServiceImpl implements DataSourceService {
                                 getIpFromUrl(dataSourceList.get(i).getJdbcUrl()));
                     }
                     isHealthList.set(i, Boolean.FALSE);
-                    
+
                     MetricsMonitor.getDbException().increment();
                 }
             }
